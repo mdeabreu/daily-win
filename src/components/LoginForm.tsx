@@ -44,7 +44,7 @@ export default function LoginForm() {
   return (
     <section className="login-card">
       <h2>Sign in</h2>
-      <p className="muted">Use your Payload account to continue.</p>
+      <p className="muted">Please login to continue.</p>
       <form className="login-form" onSubmit={handleSubmit}>
         <label>
           Email

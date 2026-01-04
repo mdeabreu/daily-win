@@ -146,7 +146,6 @@ export default function TodayTab({ data }: { data: TodayTabData | null }) {
         <header className="today-header">
           <div>
             <p className="today-date">{todayLabel}</p>
-            <p className="today-intro">Close the day with a quick check-in.</p>
           </div>
           <span className="streak-pill">Journal streak: {data.journalStreak} days</span>
         </header>
