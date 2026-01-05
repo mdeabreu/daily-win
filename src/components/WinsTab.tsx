@@ -1,14 +1,266 @@
-import React from 'react'
+'use client'
+
+import React, { useEffect, useMemo, useState } from 'react'
+import { Archive, ArchiveRestore, Pencil } from 'lucide-react'
+
+import type { Win } from '@/payload-types'
+
+type FetchStatus = 'idle' | 'loading' | 'error'
+
+type DraftState = {
+  id: number | null
+  name: string
+  description: string
+}
+
+const sortWins = (wins: Win[]) => {
+  return [...wins].sort((a, b) => {
+    if (a._order && b._order) {
+      return a._order.localeCompare(b._order, undefined, { numeric: true })
+    }
+    return a.createdAt.localeCompare(b.createdAt)
+  })
+}
 
 export default function WinsTab() {
+  const [wins, setWins] = useState<Win[]>([])
+  const [status, setStatus] = useState<FetchStatus>('loading')
+  const [editing, setEditing] = useState<DraftState | null>(null)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [draftName, setDraftName] = useState('')
+  const [draftDescription, setDraftDescription] = useState('')
+  const [actionStatus, setActionStatus] = useState<string | null>(null)
+
+  const activeWins = useMemo(() => wins.filter((win) => win.active !== false), [wins])
+  const archivedWins = useMemo(() => wins.filter((win) => win.active === false), [wins])
+
+  const fetchWins = async () => {
+    setStatus('loading')
+    try {
+      const params = new URLSearchParams()
+      params.set('limit', '200')
+      params.set('depth', '0')
+      params.set('sort', '_order')
+      const response = await fetch(`/api/wins?${params.toString()}`)
+
+      if (!response.ok) {
+        throw new Error('Failed to load wins')
+      }
+
+      const result = (await response.json()) as { docs: Win[] }
+      setWins(sortWins(result.docs))
+      setStatus('idle')
+    } catch (error) {
+      console.error(error)
+      setStatus('error')
+    }
+  }
+
+  useEffect(() => {
+    void fetchWins()
+  }, [])
+
+  const openDrawer = (win?: Win) => {
+    if (win) {
+      setEditing({ id: win.id, name: win.name, description: win.description ?? '' })
+      setDraftName(win.name)
+      setDraftDescription(win.description ?? '')
+    } else {
+      setEditing(null)
+      setDraftName('')
+      setDraftDescription('')
+    }
+    setDrawerOpen(true)
+  }
+
+  const toggleArchive = async (win: Win, nextActive: boolean) => {
+    setActionStatus(nextActive ? 'Unarchiving...' : 'Archiving...')
+    try {
+      const response = await fetch(`/api/wins/${win.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: nextActive }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to update win')
+      }
+
+      const updated = (await response.json()) as Win
+      setWins((prev) => sortWins(prev.map((item) => (item.id === updated.id ? updated : item))))
+      setActionStatus(null)
+    } catch (error) {
+      console.error(error)
+      setActionStatus('Update failed')
+    }
+  }
+
+  const closeDrawer = () => {
+    setDrawerOpen(false)
+    setDraftName('')
+    setDraftDescription('')
+    setEditing(null)
+  }
+
+  const saveWin = async () => {
+    if (!draftName.trim()) return
+    const isEditing = Boolean(editing?.id)
+    setActionStatus(isEditing ? 'Saving win...' : 'Creating win...')
+
+    try {
+      const response = await fetch(isEditing ? `/api/wins/${editing?.id}` : '/api/wins', {
+        method: isEditing ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: draftName.trim(),
+          description: draftDescription.trim() || null,
+          ...(isEditing ? {} : { active: true }),
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to save win')
+      }
+
+      const saved = (await response.json()) as Win
+      setWins((prev) => {
+        if (isEditing) {
+          return sortWins(prev.map((win) => (win.id === saved.id ? saved : win)))
+        }
+        return sortWins([...prev, saved])
+      })
+      closeDrawer()
+      setActionStatus(null)
+    } catch (error) {
+      console.error(error)
+      setActionStatus('Save failed')
+    }
+  }
+
+  if (status === 'loading') {
+    return (
+      <>
+        <h2>Wins</h2>
+        <p className="placeholder">Loading wins...</p>
+      </>
+    )
+  }
+
+  if (status === 'error') {
+    return (
+      <>
+        <h2>Wins</h2>
+        <p className="placeholder">Could not load wins.</p>
+      </>
+    )
+  }
+
   return (
     <>
       <h2>Wins</h2>
-      <p className="placeholder">Placeholder content for saved wins and highlights.</p>
-      <div className="placeholder-grid">
-        <div className="placeholder-card" />
-        <div className="placeholder-card" />
+      <div className="wins-tab">
+        <header className="wins-header">
+          <div>
+            <p className="wins-intro">Track your active wins and archive the ones you complete.</p>
+            {actionStatus && <p className="wins-status">{actionStatus}</p>}
+          </div>
+          <div className="wins-actions">
+            <button className="primary-button" type="button" onClick={() => openDrawer()}>
+              Add win
+            </button>
+          </div>
+        </header>
+
+        <section className="wins-list">
+          {activeWins.length === 0 && <p className="muted">No active wins yet.</p>}
+          {activeWins.map((win) => {
+            return (
+              <article
+                key={win.id}
+                className="win-item"
+              >
+                <div className="win-body">
+                  <h3>{win.name}</h3>
+                  {win.description && <p>{win.description}</p>}
+                </div>
+                <div className="win-actions">
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label="Edit win"
+                    onClick={() => openDrawer(win)}
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label="Archive win"
+                    onClick={() => toggleArchive(win, false)}
+                  >
+                    <Archive size={16} />
+                  </button>
+                </div>
+              </article>
+            )
+          })}
+        </section>
+
+        <details className="archived-section">
+          <summary>Archived wins ({archivedWins.length})</summary>
+          <div className="archived-list">
+            {archivedWins.length === 0 && <p className="muted">No archived wins yet.</p>}
+            {archivedWins.map((win) => (
+              <article key={win.id} className="win-item archived">
+                <div className="win-body">
+                  <h3>{win.name}</h3>
+                  {win.description && <p>{win.description}</p>}
+                </div>
+                <div className="win-actions">
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label="Unarchive win"
+                    onClick={() => toggleArchive(win, true)}
+                  >
+                    <ArchiveRestore size={16} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </details>
       </div>
+
+      <aside className={`note-drawer${drawerOpen ? ' is-open' : ''}`} role="dialog">
+        <div className="note-drawer-header">
+          <h4>{editing ? 'Edit win' : 'Add a new win'}</h4>
+          <button className="note-close" type="button" onClick={closeDrawer}>
+            Close
+          </button>
+        </div>
+        <label className="drawer-label">
+          Name
+          <input
+            className="drawer-input"
+            type="text"
+            value={draftName}
+            onChange={(event) => setDraftName(event.target.value)}
+          />
+        </label>
+        <label className="drawer-label">
+          Description
+          <textarea
+            className="drawer-input drawer-textarea"
+            rows={3}
+            value={draftDescription}
+            onChange={(event) => setDraftDescription(event.target.value)}
+          />
+        </label>
+        <button className="primary-button" type="button" onClick={saveWin}>
+          {editing ? 'Save changes' : 'Create win'}
+        </button>
+      </aside>
     </>
   )
 }

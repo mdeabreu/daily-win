@@ -77,7 +77,7 @@ export default async function HomePage() {
         const winsResponse = await payload.find({
           collection: 'wins',
           limit: 100,
-          sort: 'createdAt',
+          sort: '_order',
           depth: 0,
           where: { active: { equals: true } },
           user,
