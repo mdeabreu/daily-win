@@ -4,6 +4,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Journal, Win } from '@/payload-types'
+import Drawer from '@/components/Drawer'
+import DrawerContent from '@/components/DrawerContent'
 
 export type TodayTabData = {
   todayISO: string
@@ -78,12 +80,19 @@ const getDateRange = (dateKey: string) => {
   return { start, end }
 }
 
-export default function TodayTab({ data }: { data: TodayTabData | null }) {
+export default function TodayTab({
+  data,
+  onJournalSaved,
+}: {
+  data: TodayTabData | null
+  onJournalSaved?: (journal: Journal) => void
+}) {
   const [activeNoteWinId, setActiveNoteWinId] = useState<number | null>(null)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [dateStatus, setDateStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [supportsPicker, setSupportsPicker] = useState(true)
   const [isTouch, setIsTouch] = useState(false)
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(data?.journal?.updatedAt ?? null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
 
   const [journalId, setJournalId] = useState<number | null>(data?.journal?.id ?? null)
@@ -142,6 +151,32 @@ export default function TodayTab({ data }: { data: TodayTabData | null }) {
     return Boolean(rating || journalText.trim() || winsState.some((entry) => entry.completed))
   }, [data, journalText, rating, winsState])
 
+  useEffect(() => {
+    if (!data) return
+    setWinsState((prev) => {
+      const previousMap = new Map(prev.map((entry) => [entry.winId, entry]))
+      const next = data.wins.map((win) => {
+        const existing = previousMap.get(win.id)
+        if (existing) return existing
+        return { winId: win.id, completed: false, note: '' }
+      })
+      if (!isDirty) {
+        setInitialSnapshot(buildSnapshot(rating, journalText, next))
+      }
+      return next
+    })
+  }, [data?.wins, isDirty, journalText, rating])
+
+  useEffect(() => {
+    if (!data) return
+    if (selectedDateKey !== todayKey) return
+    if (isDirty) return
+    if (data.journal?.updatedAt && lastSavedAt && data.journal.updatedAt < lastSavedAt) {
+      return
+    }
+    applyJournal(data.journal ?? null)
+  }, [data?.journal, isDirty, lastSavedAt, selectedDateKey, todayKey])
+
   const openNoteDrawer = (winId: number) => {
     setActiveNoteWinId(winId)
   }
@@ -163,6 +198,7 @@ export default function TodayTab({ data }: { data: TodayTabData | null }) {
     setWinsState(data ? buildWinsState(data.wins, journal) : [])
     setActiveNoteWinId(null)
     setSaveStatus('idle')
+    setLastSavedAt(journal?.updatedAt ?? null)
     setInitialSnapshot(
       buildSnapshot(
         journal?.rating ?? null,
@@ -205,11 +241,22 @@ export default function TodayTab({ data }: { data: TodayTabData | null }) {
         throw new Error(`Failed to save journal: ${response.status}`)
       }
 
-      const saved = (await response.json()) as Journal
-      setJournalId(saved.id)
-      setInitialSnapshot(buildSnapshot(rating, journalText, winsState))
+      const result = (await response.json()) as Journal | { doc: Journal }
+      const saved = 'doc' in result ? result.doc : result
+      const merged: Journal = {
+        ...saved,
+        date: saved.date ?? payload.date,
+        rating: saved.rating ?? rating ?? null,
+        journal: saved.journal ?? journalText ?? null,
+        wins: saved.wins ?? winsPayload,
+      }
+      applyJournal(merged)
+      setJournalId(merged.id)
       setSaveStatus('saved')
       window.setTimeout(() => setSaveStatus('idle'), 2500)
+      if (onJournalSaved) {
+        onJournalSaved(saved)
+      }
       return true
     } catch (error) {
       console.error(error)
@@ -232,6 +279,7 @@ export default function TodayTab({ data }: { data: TodayTabData | null }) {
 
       const response = await fetch(`/api/journals?${params.toString()}`, {
         method: 'GET',
+        cache: 'no-store',
       })
 
       if (!response.ok) {
@@ -464,27 +512,30 @@ export default function TodayTab({ data }: { data: TodayTabData | null }) {
         </div>
       </div>
 
-      <aside className={`note-drawer${activeNoteWinId ? ' is-open' : ''}`} role="dialog">
-        <div className="note-drawer-header">
-          <h4>{activeWinDetails?.name ?? 'Win note'}</h4>
-          <button className="note-close" type="button" onClick={closeNoteDrawer}>
-            Close
-          </button>
-        </div>
-        <p className="note-helper">Add a quick note for today&apos;s win.</p>
-        <textarea
-          className="note-textarea"
-          rows={5}
-          placeholder="A little detail about what made this a win..."
-          value={activeNoteWin?.note ?? ''}
-          onChange={(event) =>
-            activeNoteWinId && updateWinState(activeNoteWinId, { note: event.target.value })
+      <Drawer
+        title={activeWinDetails?.name ?? 'Win note'}
+        open={Boolean(activeNoteWinId)}
+        onClose={closeNoteDrawer}
+      >
+        <DrawerContent
+          helper="Add a quick note for today's win."
+          actions={
+            <button className="primary-button" type="button" onClick={closeNoteDrawer}>
+              Done
+            </button>
           }
-        />
-        <button className="primary-button" type="button" onClick={closeNoteDrawer}>
-          Done
-        </button>
-      </aside>
+        >
+          <textarea
+            className="note-textarea"
+            rows={5}
+            placeholder="A little detail about what made this a win..."
+            value={activeNoteWin?.note ?? ''}
+            onChange={(event) =>
+              activeNoteWinId && updateWinState(activeNoteWinId, { note: event.target.value })
+            }
+          />
+        </DrawerContent>
+      </Drawer>
     </>
   )
 }

@@ -1,11 +1,11 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { Archive, ArchiveRestore, Pencil } from 'lucide-react'
 
 import type { Win } from '@/payload-types'
-
-type FetchStatus = 'idle' | 'loading' | 'error'
+import Drawer from '@/components/Drawer'
+import DrawerContent from '@/components/DrawerContent'
 
 type DraftState = {
   id: number | null
@@ -22,43 +22,27 @@ const sortWins = (wins: Win[]) => {
   })
 }
 
-export default function WinsTab() {
-  const [wins, setWins] = useState<Win[]>([])
-  const [status, setStatus] = useState<FetchStatus>('loading')
+export default function WinsTab({
+  wins,
+  onRefresh,
+}: {
+  wins: Win[]
+  onRefresh: () => Promise<void>
+}) {
   const [editing, setEditing] = useState<DraftState | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [draftName, setDraftName] = useState('')
   const [draftDescription, setDraftDescription] = useState('')
   const [actionStatus, setActionStatus] = useState<string | null>(null)
 
-  const activeWins = useMemo(() => wins.filter((win) => win.active !== false), [wins])
-  const archivedWins = useMemo(() => wins.filter((win) => win.active === false), [wins])
-
-  const fetchWins = async () => {
-    setStatus('loading')
-    try {
-      const params = new URLSearchParams()
-      params.set('limit', '200')
-      params.set('depth', '0')
-      params.set('sort', '_order')
-      const response = await fetch(`/api/wins?${params.toString()}`)
-
-      if (!response.ok) {
-        throw new Error('Failed to load wins')
-      }
-
-      const result = (await response.json()) as { docs: Win[] }
-      setWins(sortWins(result.docs))
-      setStatus('idle')
-    } catch (error) {
-      console.error(error)
-      setStatus('error')
-    }
-  }
-
-  useEffect(() => {
-    void fetchWins()
-  }, [])
+  const activeWins = useMemo(
+    () => sortWins(wins.filter((win) => win.active !== false)),
+    [wins],
+  )
+  const archivedWins = useMemo(
+    () => sortWins(wins.filter((win) => win.active === false)),
+    [wins],
+  )
 
   const openDrawer = (win?: Win) => {
     if (win) {
@@ -86,8 +70,8 @@ export default function WinsTab() {
         throw new Error('Failed to update win')
       }
 
-      const updated = (await response.json()) as Win
-      setWins((prev) => sortWins(prev.map((item) => (item.id === updated.id ? updated : item))))
+      await response.json()
+      await onRefresh()
       setActionStatus(null)
     } catch (error) {
       console.error(error)
@@ -122,37 +106,14 @@ export default function WinsTab() {
         throw new Error('Failed to save win')
       }
 
-      const saved = (await response.json()) as Win
-      setWins((prev) => {
-        if (isEditing) {
-          return sortWins(prev.map((win) => (win.id === saved.id ? saved : win)))
-        }
-        return sortWins([...prev, saved])
-      })
+      await response.json()
+      await onRefresh()
       closeDrawer()
       setActionStatus(null)
     } catch (error) {
       console.error(error)
       setActionStatus('Save failed')
     }
-  }
-
-  if (status === 'loading') {
-    return (
-      <>
-        <h2>Wins</h2>
-        <p className="placeholder">Loading wins...</p>
-      </>
-    )
-  }
-
-  if (status === 'error') {
-    return (
-      <>
-        <h2>Wins</h2>
-        <p className="placeholder">Could not load wins.</p>
-      </>
-    )
   }
 
   return (
@@ -232,35 +193,35 @@ export default function WinsTab() {
         </details>
       </div>
 
-      <aside className={`note-drawer${drawerOpen ? ' is-open' : ''}`} role="dialog">
-        <div className="note-drawer-header">
-          <h4>{editing ? 'Edit win' : 'Add a new win'}</h4>
-          <button className="note-close" type="button" onClick={closeDrawer}>
-            Close
-          </button>
-        </div>
-        <label className="drawer-label">
-          Name
-          <input
-            className="drawer-input"
-            type="text"
-            value={draftName}
-            onChange={(event) => setDraftName(event.target.value)}
-          />
-        </label>
-        <label className="drawer-label">
-          Description
-          <textarea
-            className="drawer-input drawer-textarea"
-            rows={3}
-            value={draftDescription}
-            onChange={(event) => setDraftDescription(event.target.value)}
-          />
-        </label>
-        <button className="primary-button" type="button" onClick={saveWin}>
-          {editing ? 'Save changes' : 'Create win'}
-        </button>
-      </aside>
+      <Drawer title={editing ? 'Edit win' : 'Add a new win'} open={drawerOpen} onClose={closeDrawer}>
+        <DrawerContent
+          helper={editing ? 'Update the details for this win.' : 'Add a win you want to track.'}
+          actions={
+            <button className="primary-button" type="button" onClick={saveWin}>
+              {editing ? 'Save changes' : 'Create win'}
+            </button>
+          }
+        >
+          <label className="drawer-label">
+            Name
+            <input
+              className="drawer-input"
+              type="text"
+              value={draftName}
+              onChange={(event) => setDraftName(event.target.value)}
+            />
+          </label>
+          <label className="drawer-label">
+            Description
+            <textarea
+              className="drawer-input drawer-textarea"
+              rows={3}
+              value={draftDescription}
+              onChange={(event) => setDraftDescription(event.target.value)}
+            />
+          </label>
+        </DrawerContent>
+      </Drawer>
     </>
   )
 }
