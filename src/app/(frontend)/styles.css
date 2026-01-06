@@ -730,6 +730,25 @@ main {
   z-index: 10;
 }
 
+.note-drawer * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(18, 22, 24, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 9;
+}
+
+.drawer-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .note-drawer.is-open {
   transform: translateY(0);
   opacity: 1;
@@ -763,6 +782,7 @@ main {
   border: 1px solid var(--line);
   padding: 10px 12px;
   font-family: 'Public Sans', system-ui, sans-serif;
+  font-size: 16px;
   margin-bottom: 12px;
   resize: vertical;
 }
@@ -787,6 +807,39 @@ main {
 .drawer-actions {
   display: flex;
   justify-content: flex-start;
+}
+
+.note-close,
+.note-drawer .primary-button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.note-drawer .drawer-fields {
+  max-height: 65vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+@media (max-width: 640px) {
+  .note-drawer {
+    right: 0;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    border-radius: 20px 20px 0 0;
+    transform: translateY(110%);
+    padding-bottom: 24px;
+  }
+
+  .note-drawer.is-open {
+    transform: translateY(0);
+  }
+
+  .drawer-fields {
+    max-height: 55vh;
+  }
 }
 
 .wins-tab {
@@ -938,6 +991,7 @@ main {
   border: 1px solid var(--line);
   padding: 10px 12px;
   font-family: 'Public Sans', system-ui, sans-serif;
+  font-size: 16px;
 }
 
 .drawer-textarea {

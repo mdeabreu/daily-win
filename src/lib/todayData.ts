@@ -1,4 +1,5 @@
 import type { Journal, Win } from '@/payload-types'
+import { addDays, addDaysToKey, getDateFromKey, getDateKey } from '@/lib/date'
 
 export type TodayDataInput = {
   todayISO: string
@@ -6,36 +7,17 @@ export type TodayDataInput = {
   journals: Journal[]
 }
 
-export const getDateKey = (value: string) => {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return date.toISOString().slice(0, 10)
-}
-
-export const addDays = (date: Date, offset: number) => {
-  const result = new Date(date)
-  result.setDate(result.getDate() + offset)
-  return result
-}
-
-export const getTodayRange = () => {
-  const now = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const end = addDays(start, 1)
-  return { start, end }
-}
-
 const getStreakStartKey = (todayKey: string, hasEntryToday: boolean) => {
-  const today = new Date(todayKey)
-  return hasEntryToday ? todayKey : getDateKey(addDays(today, -1).toISOString())
+  if (hasEntryToday) return todayKey
+  return addDaysToKey(todayKey, -1)
 }
 
 const calculateJournalStreak = (completedDates: Set<string>, startKey: string) => {
   let streak = 0
-  const startDate = new Date(startKey)
+  const startDate = getDateFromKey(startKey)
 
   for (let offset = 0; offset < 60; offset += 1) {
-    const key = getDateKey(addDays(startDate, -offset).toISOString())
+    const key = getDateKey(addDays(startDate, -offset))
     if (!completedDates.has(key)) break
     streak += 1
   }
@@ -53,10 +35,10 @@ const calculateWinStreaks = (
   winIds.forEach((winId) => {
     const hasToday = winsByDate.get(todayKey)?.has(winId) ?? false
     const startKey = getStreakStartKey(todayKey, hasToday)
-    const startDate = new Date(startKey)
+    const startDate = getDateFromKey(startKey)
     let count = 0
     for (let offset = 0; offset < 60; offset += 1) {
-      const key = getDateKey(addDays(startDate, -offset).toISOString())
+      const key = getDateKey(addDays(startDate, -offset))
       const winsOnDate = winsByDate.get(key)
       if (!winsOnDate?.has(winId)) break
       count += 1

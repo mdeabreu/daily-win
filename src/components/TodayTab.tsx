@@ -6,6 +6,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Journal, Win } from '@/payload-types'
 import Drawer from '@/components/Drawer'
 import DrawerContent from '@/components/DrawerContent'
+import { addDaysToKey, getDateKey, getDateRange } from '@/lib/date'
+import { useJournalDay } from '@/hooks/useJournalDay'
 
 export type TodayTabData = {
   todayISO: string
@@ -22,6 +24,13 @@ type WinEntryState = {
 }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
+type SaveContext = {
+  dateKey: string
+  journalId: number | null
+  rating: number | null
+  journalText: string
+  winsState: WinEntryState[]
+}
 
 function LoggedOutToday() {
   return (
@@ -61,37 +70,41 @@ const buildSnapshot = (rating: number | null, journalText: string, winsState: Wi
   })
 }
 
-const getDateKey = (date: Date) => date.toISOString().slice(0, 10)
+const buildPayload = ({ dateKey, rating, journalText, winsState }: SaveContext) => {
+  const winsPayload = winsState
+    .filter((entry) => entry.completed)
+    .map((entry) => ({
+      win: entry.winId,
+      completed: entry.completed,
+      note: entry.note.trim() || undefined,
+    }))
 
-const addDays = (date: Date, offset: number) => {
-  const next = new Date(date)
-  next.setDate(next.getDate() + offset)
-  return next
-}
-
-const addDaysToKey = (dateKey: string, offset: number) => {
-  const date = new Date(`${dateKey}T00:00:00`)
-  return getDateKey(addDays(date, offset))
-}
-
-const getDateRange = (dateKey: string) => {
-  const start = new Date(`${dateKey}T00:00:00`)
-  const end = addDays(start, 1)
-  return { start, end }
+  const { start } = getDateRange(dateKey)
+  return {
+    date: start.toISOString(),
+    rating: rating ?? undefined,
+    journal: journalText.trim() || undefined,
+    wins: winsPayload,
+  }
 }
 
 export default function TodayTab({
   data,
   onJournalSaved,
+  selectedDateKey: requestedDateKey,
+  onDateChange,
 }: {
   data: TodayTabData | null
   onJournalSaved?: (journal: Journal) => void
+  selectedDateKey?: string
+  onDateChange?: (dateKey: string) => void
 }) {
   const [activeNoteWinId, setActiveNoteWinId] = useState<number | null>(null)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
-  const [dateStatus, setDateStatus] = useState<'idle' | 'loading' | 'error'>('idle')
+  const { status: dateStatus, load: loadJournalDay } = useJournalDay()
   const [supportsPicker, setSupportsPicker] = useState(true)
   const [isTouch, setIsTouch] = useState(false)
+  const [hasMounted, setHasMounted] = useState(false)
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(data?.journal?.updatedAt ?? null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -101,8 +114,11 @@ export default function TodayTab({
   const [winsState, setWinsState] = useState<WinEntryState[]>(() =>
     data ? buildWinsState(data.wins, data.journal) : [],
   )
-  const todayKey = data?.todayISO ? data.todayISO.slice(0, 10) : ''
+  const todayKey = data?.todayISO ? getDateKey(data.todayISO) : ''
   const [selectedDateKey, setSelectedDateKey] = useState<string>(todayKey)
+  const selectedDateKeyRef = useRef(selectedDateKey)
+  const saveTimerRef = useRef<number | null>(null)
+  const saveInFlightRef = useRef(false)
   const [initialSnapshot, setInitialSnapshot] = useState<string>(() =>
     buildSnapshot(
       data?.journal?.rating ?? null,
@@ -112,6 +128,7 @@ export default function TodayTab({
   )
 
   useEffect(() => {
+    setHasMounted(true)
     const hasPicker =
       typeof window !== 'undefined' &&
       typeof HTMLInputElement !== 'undefined' &&
@@ -122,6 +139,10 @@ export default function TodayTab({
         ('ontouchstart' in window || (navigator?.maxTouchPoints ?? 0) > 0),
     )
   }, [])
+
+  useEffect(() => {
+    selectedDateKeyRef.current = selectedDateKey
+  }, [selectedDateKey])
 
   const todayLabel = useMemo(() => {
     if (!selectedDateKey) return 'Today'
@@ -151,6 +172,17 @@ export default function TodayTab({
     return Boolean(rating || journalText.trim() || winsState.some((entry) => entry.completed))
   }, [data, journalText, rating, winsState])
 
+  const lastSavedLabel = useMemo(() => {
+    if (!hasMounted) return null
+    if (!lastSavedAt) return null
+    const savedDate = new Date(lastSavedAt)
+    if (Number.isNaN(savedDate.getTime())) return null
+    return new Intl.DateTimeFormat(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(savedDate)
+  }, [hasMounted, lastSavedAt])
+
   useEffect(() => {
     if (!data) return
     setWinsState((prev) => {
@@ -174,8 +206,44 @@ export default function TodayTab({
     if (data.journal?.updatedAt && lastSavedAt && data.journal.updatedAt < lastSavedAt) {
       return
     }
-    applyJournal(data.journal ?? null)
-  }, [data?.journal, isDirty, lastSavedAt, selectedDateKey, todayKey])
+    applyJournal(data.journal ?? null, { keepNoteOpen: Boolean(activeNoteWinId) })
+  }, [activeNoteWinId, data?.journal, isDirty, lastSavedAt, selectedDateKey, todayKey])
+
+  useEffect(() => {
+    if (!data) return
+    if (!isDirty) return
+    if (!canSave) return
+    if (saveInFlightRef.current) return
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current)
+    }
+
+    const context: SaveContext = {
+      dateKey: selectedDateKey,
+      journalId,
+      rating,
+      journalText,
+      winsState,
+    }
+
+    saveTimerRef.current = window.setTimeout(() => {
+      void saveSnapshot(context)
+    }, 900)
+
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+    }
+  }, [canSave, data, isDirty, journalId, journalText, rating, selectedDateKey, winsState])
+
+  useEffect(() => {
+    if (!requestedDateKey) return
+    if (requestedDateKey === selectedDateKey) return
+    void requestDateChange(requestedDateKey, { notifyParent: false })
+  }, [requestedDateKey, selectedDateKey])
 
   const openNoteDrawer = (winId: number) => {
     setActiveNoteWinId(winId)
@@ -191,12 +259,14 @@ export default function TodayTab({
     )
   }
 
-  const applyJournal = (journal: Journal | null) => {
+  const applyJournal = (journal: Journal | null, options?: { keepNoteOpen?: boolean }) => {
     setJournalId(journal?.id ?? null)
     setRating(journal?.rating ?? null)
     setJournalText(journal?.journal ?? '')
     setWinsState(data ? buildWinsState(data.wins, journal) : [])
-    setActiveNoteWinId(null)
+    if (!options?.keepNoteOpen) {
+      setActiveNoteWinId(null)
+    }
     setSaveStatus('idle')
     setLastSavedAt(journal?.updatedAt ?? null)
     setInitialSnapshot(
@@ -208,31 +278,21 @@ export default function TodayTab({
     )
   }
 
-  const handleSave = async (): Promise<boolean> => {
+  const saveSnapshot = async (context: SaveContext): Promise<boolean> => {
     if (!data) return false
+    if (saveInFlightRef.current) return false
 
-    setSaveStatus('saving')
-
-    const winsPayload = winsState
-      .filter((entry) => entry.completed)
-      .map((entry) => ({
-        win: entry.winId,
-        completed: entry.completed,
-        note: entry.note.trim() || undefined,
-      }))
-
-    const { start } = getDateRange(selectedDateKey)
-    const payload = {
-      date: start.toISOString(),
-      rating: rating ?? undefined,
-      journal: journalText.trim() || undefined,
-      wins: winsPayload,
+    saveInFlightRef.current = true
+    const isCurrentDate = () => context.dateKey === selectedDateKeyRef.current
+    if (isCurrentDate()) {
+      setSaveStatus('saving')
     }
+    const payload = buildPayload(context)
 
     try {
-      const endpoint = journalId ? `/api/journals/${journalId}` : '/api/journals'
+      const endpoint = context.journalId ? `/api/journals/${context.journalId}` : '/api/journals'
       const response = await fetch(endpoint, {
-        method: journalId ? 'PATCH' : 'POST',
+        method: context.journalId ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
@@ -246,76 +306,81 @@ export default function TodayTab({
       const merged: Journal = {
         ...saved,
         date: saved.date ?? payload.date,
-        rating: saved.rating ?? rating ?? null,
-        journal: saved.journal ?? journalText ?? null,
-        wins: saved.wins ?? winsPayload,
+        rating: saved.rating ?? context.rating ?? null,
+        journal: saved.journal ?? context.journalText ?? null,
+        wins: saved.wins ?? payload.wins,
       }
-      applyJournal(merged)
-      setJournalId(merged.id)
-      setSaveStatus('saved')
-      window.setTimeout(() => setSaveStatus('idle'), 2500)
+
+      if (isCurrentDate()) {
+        applyJournal(merged, { keepNoteOpen: true })
+        setJournalId(merged.id)
+        setLastSavedAt(merged.updatedAt ?? new Date().toISOString())
+        setSaveStatus('saved')
+        window.setTimeout(() => setSaveStatus('idle'), 2500)
+      }
       if (onJournalSaved) {
         onJournalSaved(saved)
       }
       return true
     } catch (error) {
       console.error(error)
-      setSaveStatus('error')
-      return false
-    }
-  }
-
-  const loadJournalForDate = async (dateKey: string) => {
-    if (!data) return false
-    setDateStatus('loading')
-
-    try {
-      const { start, end } = getDateRange(dateKey)
-      const params = new URLSearchParams()
-      params.set('limit', '1')
-      params.set('depth', '0')
-      params.set('where[and][0][date][greater_than_equal]', start.toISOString())
-      params.set('where[and][1][date][less_than]', end.toISOString())
-
-      const response = await fetch(`/api/journals?${params.toString()}`, {
-        method: 'GET',
-        cache: 'no-store',
-      })
-
-      if (!response.ok) {
-        throw new Error(`Failed to load journal: ${response.status}`)
+      if (isCurrentDate()) {
+        setSaveStatus('error')
       }
-
-      const result = (await response.json()) as { docs: Journal[] }
-      const journal = result.docs[0] ?? null
-
-      applyJournal(journal)
-      setDateStatus('idle')
-      return true
-    } catch (error) {
-      console.error(error)
-      setDateStatus('error')
       return false
+    } finally {
+      saveInFlightRef.current = false
     }
   }
 
-  const confirmSaveIfDirty = async () => {
-    if (!isDirty) return true
-    const shouldSave = window.confirm('You have unsaved changes. Save before leaving this day?')
-    if (!shouldSave) return false
-    return handleSave()
+  const handleSave = async (): Promise<boolean> => {
+    return saveSnapshot({
+      dateKey: selectedDateKey,
+      journalId,
+      rating,
+      journalText,
+      winsState,
+    })
   }
 
-  const requestDateChange = async (nextKey: string) => {
+  const requestDateChange = async (
+    nextKey: string,
+    { notifyParent = true }: { notifyParent?: boolean } = {},
+  ) => {
     if (nextKey === selectedDateKey) return
     if (nextKey > todayKey) return
 
-    const canLeave = await confirmSaveIfDirty()
-    if (!canLeave) return
+    setActiveNoteWinId(null)
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+
+    if (isDirty && canSave) {
+      void saveSnapshot({
+        dateKey: selectedDateKey,
+        journalId,
+        rating,
+        journalText,
+        winsState,
+      })
+    }
 
     const previousKey = selectedDateKey
     setSelectedDateKey(nextKey)
-    const loaded = await loadJournalForDate(nextKey)
+    if (notifyParent) {
+      onDateChange?.(nextKey)
+    }
+    const loaded = await loadJournalDay(nextKey)
+      .then((journal) => {
+        applyJournal(journal)
+        return true
+      })
+      .catch((error) => {
+        console.error(error)
+        return false
+      })
     if (loaded) {
       return
     }
@@ -501,13 +566,20 @@ export default function TodayTab({
         </div>
 
         <div className="today-actions">
-          <button className="primary-button" type="button" onClick={handleSave} disabled={!canSave}>
-            {journalId ? 'Save updates' : 'Save today'}
+          <button
+            className="primary-button"
+            type="button"
+            onClick={handleSave}
+            disabled={!canSave || saveStatus === 'saving'}
+          >
+            Save now
           </button>
-          <span className={`save-status status-${saveStatus}`}>
+          <span className={`save-status status-${saveStatus}`} suppressHydrationWarning>
             {saveStatus === 'saving' && 'Saving...'}
             {saveStatus === 'saved' && 'Saved'}
             {saveStatus === 'error' && 'Could not save'}
+            {saveStatus === 'idle' && lastSavedLabel ? `Last saved at ${lastSavedLabel}` : ''}
+            {saveStatus === 'saved' && lastSavedLabel ? ` · ${lastSavedLabel}` : ''}
           </span>
         </div>
       </div>

@@ -3,7 +3,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
 
 import type { Journal } from '@/payload-types'
-import { getDateKey } from '@/lib/todayData'
+import { buildDayKey, getDateKey } from '@/lib/date'
+import { buildDateRangeWhere } from '@/lib/api'
+import { useJournals } from '@/hooks/useJournals'
 
 const monthLabels = [
   'Jan',
@@ -22,9 +24,9 @@ const monthLabels = [
 
 type ProgressTabProps = {
   journals: Journal[]
+  onDaySelect?: (dateKey: string) => void
 }
 
-type LoadState = 'idle' | 'loading' | 'error'
 type LayoutMode = 'month' | 'week'
 
 const buildYearRange = (year: number) => {
@@ -33,19 +35,19 @@ const buildYearRange = (year: number) => {
   return { start, end }
 }
 
-const buildDayKey = (year: number, monthIndex: number, day: number) => {
-  const date = new Date(year, monthIndex, day, 12)
-  return getDateKey(date.toISOString())
-}
-
 const getJournalKey = (journal: Journal) => {
   return getDateKey(journal.date)
 }
 
-export default function ProgressTab({ journals }: ProgressTabProps) {
-  const [yearJournals, setYearJournals] = useState<Journal[]>(journals)
-  const [loadState, setLoadState] = useState<LoadState>('idle')
+export default function ProgressTab({ journals, onDaySelect }: ProgressTabProps) {
+  const {
+    journals: yearJournals,
+    setJournals: setYearJournals,
+    status: loadState,
+    refresh: refreshJournals,
+  } = useJournals({ initialJournals: journals })
   const currentYear = useMemo(() => new Date().getFullYear(), [])
+  const todayKey = useMemo(() => getDateKey(new Date()), [])
   const [year, setYear] = useState(currentYear)
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('month')
 
@@ -57,47 +59,25 @@ export default function ProgressTab({ journals }: ProgressTabProps) {
       journals.forEach((entry) => merged.set(entry.id, entry))
       return Array.from(merged.values())
     })
-  }, [journals])
+  }, [journals, setYearJournals])
 
   useEffect(() => {
-    let isActive = true
-
     const loadYear = async () => {
-      setLoadState('loading')
       try {
         const { start, end } = buildYearRange(year)
-        const params = new URLSearchParams()
-        params.set('limit', '366')
-        params.set('depth', '0')
-        params.set('sort', 'date')
-        params.set('where[and][0][date][greater_than_equal]', start.toISOString())
-        params.set('where[and][1][date][less_than]', end.toISOString())
-
-        const response = await fetch(`/api/journals?${params.toString()}`, {
-          cache: 'no-store',
+        await refreshJournals({
+          limit: 366,
+          depth: 0,
+          sort: 'date',
+          where: buildDateRangeWhere(start, end),
         })
-
-        if (!response.ok) {
-          throw new Error(`Failed to load year journals: ${response.status}`)
-        }
-
-        const payload = (await response.json()) as { docs: Journal[] }
-        if (!isActive) return
-        setYearJournals(payload.docs)
-        setLoadState('idle')
       } catch (error) {
         console.error(error)
-        if (!isActive) return
-        setLoadState('error')
       }
     }
 
     void loadYear()
-
-    return () => {
-      isActive = false
-    }
-  }, [year])
+  }, [refreshJournals, year])
 
   const journalsByDate = useMemo(() => {
     const map = new Map<string, Journal>()
@@ -213,12 +193,17 @@ export default function ProgressTab({ journals }: ProgressTabProps) {
                     ? `${label} ${day}: ${rating}/5`
                     : `${label} ${day}: journal, no rating`
                   : `${label} ${day}: no entry`
+                const canSelect = Boolean(onDaySelect && key <= todayKey)
 
                 return (
-                  <span
+                  <button
                     key={key}
                     className={`day-dot ${stateClass}`}
                     title={labelText}
+                    aria-label={labelText}
+                    type="button"
+                    onClick={() => onDaySelect?.(key)}
+                    disabled={!canSelect}
                   />
                 )
               })
@@ -257,8 +242,19 @@ export default function ProgressTab({ journals }: ProgressTabProps) {
                   ? `${label} ${day}: ${rating}/5`
                   : `${label} ${day}: journal, no rating`
                 : `${label} ${day}: no entry`
+              const canSelect = Boolean(onDaySelect && key <= todayKey)
 
-              return <span key={key} className={`day-dot ${stateClass}`} title={labelText} />
+              return (
+                <button
+                  key={key}
+                  className={`day-dot ${stateClass}`}
+                  title={labelText}
+                  aria-label={labelText}
+                  type="button"
+                  onClick={() => onDaySelect?.(key)}
+                  disabled={!canSelect}
+                />
+              )
             })}
           </div>
         )}

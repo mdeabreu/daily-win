@@ -5,7 +5,8 @@ import { getPayload } from 'payload'
 import Tabs from '@/components/Tabs'
 import LoginForm from '@/components/LoginForm'
 import type { Journal, Win } from '@/payload-types'
-import { buildTodayData, getTodayRange } from '@/lib/todayData'
+import { getTodayRange } from '@/lib/date'
+import { buildTodayData } from '@/lib/todayData'
 
 import config from '@/payload.config'
 

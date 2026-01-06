@@ -6,7 +6,10 @@ import ProgressTab from '@/components/ProgressTab'
 import TodayTab, { type TodayTabData } from '@/components/TodayTab'
 import WinsTab from '@/components/WinsTab'
 import type { Journal, Win } from '@/payload-types'
-import { buildTodayData, getTodayRange } from '@/lib/todayData'
+import { getDateKey, getTodayRange } from '@/lib/date'
+import { buildTodayData } from '@/lib/todayData'
+import { useJournals } from '@/hooks/useJournals'
+import { useWins } from '@/hooks/useWins'
 
 const tabs = [
   { id: 'today', label: 'Today' },
@@ -25,37 +28,38 @@ type TabsProps = {
 export default function Tabs({ todayData, wins, journals }: TabsProps) {
   const [activeTab, setActiveTab] = useState<TabId>('today')
   const [todayState, setTodayState] = useState<TodayTabData | null>(todayData)
-  const [winsState, setWinsState] = useState<Win[]>(wins)
-  const [journalsState, setJournalsState] = useState<Journal[]>(journals)
+  const [selectedDateKey, setSelectedDateKey] = useState<string>(
+    todayData?.todayISO ? getDateKey(todayData.todayISO) : '',
+  )
+  const winsParams = useMemo(() => ({ limit: 200, depth: 0, sort: '_order' }), [])
+  const journalsParams = useMemo(() => ({ limit: 60, depth: 0, sort: '-date' }), [])
+  const { wins: winsState, refresh: refreshWins } = useWins({
+    initialWins: wins,
+    params: winsParams,
+  })
+  const {
+    journals: journalsState,
+    setJournals: setJournalsState,
+    refresh: refreshJournals,
+  } = useJournals({ initialJournals: journals, params: journalsParams })
 
   const refreshAll = useCallback(async () => {
-    const winsResponse = await fetch('/api/wins?limit=200&depth=0&sort=_order', {
-      cache: 'no-store',
-    })
-    const journalsResponse = await fetch('/api/journals?limit=60&depth=0&sort=-date', {
-      cache: 'no-store',
-    })
+    try {
+      const [winsData, journalDocs] = await Promise.all([refreshWins(), refreshJournals()])
+      const activeWins = winsData.filter((win) => win.active !== false)
+      const { start } = getTodayRange()
 
-    if (!winsResponse.ok || !journalsResponse.ok) {
-      return
+      setTodayState(
+        buildTodayData({
+          todayISO: start.toISOString(),
+          wins: activeWins,
+          journals: journalDocs,
+        }),
+      )
+    } catch (error) {
+      console.error(error)
     }
-
-    const winsPayload = (await winsResponse.json()) as { docs: Win[] }
-    const journalsPayload = (await journalsResponse.json()) as { docs: Journal[] }
-    const winsData = winsPayload.docs
-    const activeWins = winsData.filter((win) => win.active !== false)
-    const { start } = getTodayRange()
-
-    setWinsState(winsData)
-    setJournalsState(journalsPayload.docs)
-    setTodayState(
-      buildTodayData({
-        todayISO: start.toISOString(),
-        wins: activeWins,
-        journals: journalsPayload.docs,
-      }),
-    )
-  }, [])
+  }, [refreshJournals, refreshWins])
 
   const handleJournalSaved = useCallback(
     (saved: Journal) => {
@@ -83,12 +87,27 @@ export default function Tabs({ todayData, wins, journals }: TabsProps) {
       case 'wins':
         return <WinsTab wins={winsState} onRefresh={refreshAll} />
       case 'progress':
-        return <ProgressTab journals={journalsState} />
+        return (
+          <ProgressTab
+            journals={journalsState}
+            onDaySelect={(dateKey) => {
+              setSelectedDateKey(dateKey)
+              setActiveTab('today')
+            }}
+          />
+        )
       case 'today':
       default:
-        return <TodayTab data={todayState} onJournalSaved={handleJournalSaved} />
+        return (
+          <TodayTab
+            data={todayState}
+            onJournalSaved={handleJournalSaved}
+            selectedDateKey={selectedDateKey}
+            onDateChange={setSelectedDateKey}
+          />
+        )
     }
-  }, [activeTab, handleJournalSaved, refreshAll, todayState, winsState])
+  }, [activeTab, handleJournalSaved, journalsState, refreshAll, selectedDateKey, todayState, winsState])
 
   return (
     <section className="tabs" aria-label="Daily wins sections">
